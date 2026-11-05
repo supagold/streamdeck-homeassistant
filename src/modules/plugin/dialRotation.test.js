@@ -448,3 +448,25 @@ describe('waiting for the device between calls', () => {
     expect(deps.send).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('when the dial stops mode', () => {
+  it('sends once, after the dial has been still for the wait', async () => {
+    const { dial, deps } = harness({ settings: { sendMode: 'idle', idleSendMs: 500 } })
+    dial.rotate(CTX, 5)
+    await vi.advanceTimersByTimeAsync(400)
+    dial.rotate(CTX, 5)
+    await vi.advanceTimersByTimeAsync(400)
+    expect(deps.send).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(deps.send).toHaveBeenCalledTimes(1)
+    expect(deps.send.mock.calls[0][1]).toMatchObject({ ticks: 10, rotationPercent: 50 })
+  })
+
+  it('still updates the display on every tick', async () => {
+    const { dial, deps } = harness({ settings: { sendMode: 'idle' } })
+    dial.rotate(CTX, 5)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deps.render).toHaveBeenCalled()
+    expect(deps.send).not.toHaveBeenCalled()
+  })
+})

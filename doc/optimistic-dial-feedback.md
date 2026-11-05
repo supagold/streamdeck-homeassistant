@@ -43,6 +43,31 @@ migration is needed.
   about once per second.
 - Only one service call is in flight per dial, and the next waits for the minimum interval and the device.
 
+## Light dials: color and brightness (`dialStyle`)
+
+Two extra dial styles for lights, set in the Rotation tab. They draw their own strip (a caption, a
+large value and a slim black-bordered bar with a marker) and share one model per light, so dials on the
+same light always agree.
+
+- **Color and white bar** (`color`): a hue bar that wraps at the ends, or a white temperature bar (cool on
+  the left, warm on the right) that stops at the ends. A press switches between them.
+- **Brightness bar** (`brightness`): a dark-to-color bar with the percentage.
+- Every strip's background is the selected color dimmed to the selected brightness, and turning either
+  dial repaints both at once.
+- Color and brightness are separate channels: while one has a turn outstanding, state pushes do not move
+  its marker, and it settles only after the light's reports have gone quiet (a slow light can report old
+  values for seconds). Code: `src/modules/plugin/colorDial.js`.
+
+### Sending (all dial styles)
+
+| Setting | Default | Notes |
+|---|---|---|
+| Update the light (`sendMode`) | While turning | `idle` sends one call after the dial stops, for slow lights that lag or jump |
+| Wait after stopping (`idleSendMs`) | 500 ms | `idle` mode only |
+| Update speed (`minSendIntervalMs`) | 250-300 ms | live mode only: minimum time between updates |
+
+The strip always updates at once; only the call to the light waits.
+
 ## Known limitation: slow lights
 
 With the same build and settings, a Yeelight lamp and a Lutron Caseta dimmer showed no visible jumping and
@@ -57,5 +82,6 @@ The cause on the Govee path has not been established, and the behaviour was acce
   Home Assistant dependencies; everything is injected.
 - `src/modules/homeassistant/homeassistant.js`: `getState(entityId)` for the read-back.
 - `src/components/PluginComponent.vue`: wires the controller to rendering and service calls.
+- `src/modules/plugin/colorDial.js`: the linked color and brightness dials and their strip drawing.
 - `src/modules/common/workerTimers.js`: timers that are not clamped in the hidden page.
-- Tests: `dialModel.test.js`, `dialRotation.test.js`, `workerTimers.test.js` (`npm test`).
+- Tests: `dialModel.test.js`, `dialRotation.test.js`, `workerTimers.test.js`, `colorDial.test.js` (`npm test`).

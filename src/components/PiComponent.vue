@@ -168,7 +168,12 @@
       <!-- ── Appearance pane ──────────────────────────────────────────────── -->
       <div v-show="activeTab === 'appearance'">
         <label class="pi-label">Entity</label>
-        <TypeaheadSelect v-model="entity" class="mb-3" :items="entityItems" placeholder="No entity selected" />
+        <TypeaheadSelect
+          v-model="entity"
+          class="mb-3"
+          :items="entityItems"
+          placeholder="No entity selected"
+        />
 
         <!-- Icon source radio group -->
         <div class="mb-3">
@@ -249,7 +254,12 @@
             <label class="pi-label mt-2">Edge</label>
             <div class="pi-color-row">
               <input v-model="backgroundColorEnd" type="color" class="pi-color-swatch" />
-              <input v-model="backgroundColorEnd" type="text" class="pi-input" placeholder="#000000" />
+              <input
+                v-model="backgroundColorEnd"
+                type="text"
+                class="pi-input"
+                placeholder="#000000"
+              />
             </div>
           </template>
 
@@ -312,14 +322,18 @@
         <!-- Label font size -->
         <div class="pi-form-row">
           <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px">
-            <label class="pi-label" for="labelFontSize" style="margin: 0; flex: 1">Label font size: {{ labelFontSize }}px</label>
+            <label class="pi-label" for="labelFontSize" style="margin: 0; flex: 1"
+              >Label font size: {{ labelFontSize }}px</label
+            >
             <button
               v-if="labelFontSize !== DEFAULT_LABEL_FONT_SIZE"
               class="pi-btn-icon"
               style="font-size: 11px; padding: 2px 6px"
               title="Reset to default"
               @click="labelFontSize = DEFAULT_LABEL_FONT_SIZE"
-            >reset</button>
+            >
+              reset
+            </button>
           </div>
           <input
             id="labelFontSize"
@@ -372,8 +386,8 @@
           <summary>Available variables</summary>
           <div class="pi-vars-content">
             <div class="pi-var-text">
-              <span v-pre class="pi-var-item">{{ ticks }}</span> — ticks rotated (negative =
-              left, positive = right).
+              <span v-pre class="pi-var-item">{{ ticks }}</span> — ticks rotated (negative = left,
+              positive = right).
             </div>
             <div class="pi-var-text">
               <span v-pre class="pi-var-item">{{ rotationPercent }}</span> — 0–100 rotation
@@ -385,6 +399,47 @@
             </div>
           </div>
         </details>
+
+        <label class="pi-label" for="dialStyle">Dial style</label>
+        <select id="dialStyle" v-model="dialStyle" class="form-select form-select-sm mb-1">
+          <option value="standard">Standard</option>
+          <option value="color">Color and white bar (lights)</option>
+          <option value="brightness">Brightness bar (lights)</option>
+        </select>
+        <div class="pi-hint mb-3">
+          Color and white bar: the strip shows a color bar that wraps at the ends, or a white
+          temperature bar that stops at the ends. A press switches between them. Brightness bar:
+          shares its background with color dials on the same light.
+        </div>
+
+        <label class="pi-label" for="sendMode">Update the light</label>
+        <select id="sendMode" v-model="sendMode" class="form-select form-select-sm mb-1">
+          <option value="live">While turning</option>
+          <option value="idle">When the dial stops</option>
+        </select>
+        <div class="pi-hint mb-3">
+          The strip always updates at once. Choose "When the dial stops" for slow lights that lag or
+          jump when they get many commands.
+        </div>
+
+        <template v-if="sendMode === 'idle'">
+          <label class="pi-label" for="idleSendMs">
+            Wait after stopping
+            <span class="pi-badge ms-1">{{ idleSendMs }} ms</span>
+          </label>
+          <input
+            id="idleSendMs"
+            v-model.number="idleSendMs"
+            class="pi-range"
+            max="2000"
+            min="100"
+            step="50"
+            type="range"
+          />
+          <div class="pi-hint mb-3">
+            How long the dial must be still before the light is updated.
+          </div>
+        </template>
 
         <label class="pi-label" for="rotationTickMultiplier">
           Tick multiplier
@@ -401,63 +456,75 @@
         />
         <div class="pi-hint mb-3">Each dial tick is multiplied by this value.</div>
 
-        <label class="pi-label" for="rotationTickBucketSizeMs">
-          Tick bucket size
-          <span class="pi-badge ms-1">{{ rotationTickBucketSizeMs }} ms</span>
-        </label>
-        <input
-          id="rotationTickBucketSizeMs"
-          v-model.number="rotationTickBucketSizeMs"
-          class="pi-range"
-          max="1000"
-          min="0"
-          step="50"
-          type="range"
-        />
-        <div class="pi-hint mb-3">
-          Aggregates ticks for this duration before firing the service call. Zero = one call per
-          tick.
-        </div>
+        <template v-if="sendMode === 'live' && dialStyle === 'standard'">
+          <label class="pi-label" for="rotationTickBucketSizeMs">
+            Tick bucket size
+            <span class="pi-badge ms-1">{{ rotationTickBucketSizeMs }} ms</span>
+          </label>
+          <input
+            id="rotationTickBucketSizeMs"
+            v-model.number="rotationTickBucketSizeMs"
+            class="pi-range"
+            max="1000"
+            min="0"
+            step="50"
+            type="range"
+          />
+          <div class="pi-hint mb-3">
+            Aggregates ticks for this duration before firing the service call. Zero = one call per
+            tick.
+          </div>
+        </template>
 
-        <label class="pi-label" for="minSendIntervalMs">
-          Minimum time between calls
-          <span class="pi-badge ms-1">{{ minSendIntervalMs }} ms</span>
-        </label>
-        <input
-          id="minSendIntervalMs"
-          v-model.number="minSendIntervalMs"
-          class="pi-range"
-          max="3000"
-          min="0"
-          step="50"
-          type="range"
-        />
-        <div class="pi-hint mb-3">
-          At most one service call per this long, always with the newest value. Raise it for devices
-          that queue commands and replay them late (some Govee and cloud lights). Lower it for
-          fast local lights.
-        </div>
+        <template v-if="sendMode === 'live'">
+          <label class="pi-label" for="minSendIntervalMs">
+            Update speed
+            <span class="pi-badge ms-1">{{ minSendIntervalMs }} ms</span>
+          </label>
+          <input
+            id="minSendIntervalMs"
+            v-model.number="minSendIntervalMs"
+            class="pi-range"
+            max="3000"
+            min="0"
+            step="50"
+            type="range"
+          />
+          <div class="pi-hint mb-3">
+            Minimum time between updates, always with the newest value. Lower is faster: fast local
+            lights handle 100-300 ms. Raise it for devices that queue commands and replay them late.
+          </div>
+        </template>
 
-        <label class="pi-label" for="deviceTimeoutMs">
-          Wait for the device
-          <span class="pi-badge ms-1">{{ deviceTimeoutMs === 0 ? 'off' : deviceTimeoutMs + ' ms' }}</span>
-        </label>
-        <input
-          id="deviceTimeoutMs"
-          v-model.number="deviceTimeoutMs"
-          class="pi-range"
-          max="5000"
-          min="0"
-          step="250"
-          type="range"
-        />
-        <div class="pi-hint mb-3">
-          Before each new call, wait until the device has reached the previous value, up to this
-          long. Prevents slow lights from queuing commands and replaying them late. Zero = never
-          wait.
-        </div>
+        <template v-if="sendMode === 'live' && dialStyle === 'standard'">
+          <label class="pi-label" for="deviceTimeoutMs">
+            Wait for the device
+            <span class="pi-badge ms-1">{{
+              deviceTimeoutMs === 0 ? 'off' : deviceTimeoutMs + ' ms'
+            }}</span>
+          </label>
+          <input
+            id="deviceTimeoutMs"
+            v-model.number="deviceTimeoutMs"
+            class="pi-range"
+            max="5000"
+            min="0"
+            step="250"
+            type="range"
+          />
+          <div class="pi-hint mb-3">
+            Before each new call, wait until the device has reached the previous value, up to this
+            long. Prevents slow lights from queuing commands and replaying them late. Zero = never
+            wait.
+          </div>
+        </template>
 
-        <PiToggleRow id="chkOptimisticDisplay" v-model="optimisticDisplay" label="Instant feedback">
+        <PiToggleRow
+          v-if="dialStyle === 'standard'"
+          id="chkOptimisticDisplay"
+          v-model="optimisticDisplay"
+          label="Instant feedback"
+        >
           <div class="pi-hint mb-2">
             Shows the new value on the dial while you turn it, sends it to Home Assistant, then
             reads the real value back and corrects the display if it differs. Works for lights,
@@ -493,7 +560,9 @@
       <button class="pi-btn-ghost pi-debug-btn" type="button" @click="copyDebugInfo">
         {{ copyLabel }}
       </button>
-      <span class="pi-hint">Copies version &amp; connection info (token redacted) for bug reports.</span>
+      <span class="pi-hint"
+        >Copies version &amp; connection info (token redacted) for bug reports.</span
+      >
       <textarea
         v-if="debugReportText"
         class="pi-textarea mt-1"
@@ -548,6 +617,9 @@ const serviceRotation = ref({})
 
 const rotationTickMultiplier = ref(1)
 const rotationTickBucketSizeMs = ref(100)
+const dialStyle = ref('standard')
+const sendMode = ref('live')
+const idleSendMs = ref(500)
 const minSendIntervalMs = ref(250)
 const deviceTimeoutMs = ref(3000)
 const optimisticDisplay = ref(true)
@@ -650,6 +722,9 @@ onMounted(() => {
       serviceRotation.value = settings['button']['serviceRotation']
       rotationTickMultiplier.value = settings['rotationTickMultiplier'] || 1
       rotationTickBucketSizeMs.value = settings['rotationTickBucketSizeMs'] ?? 100
+      dialStyle.value = settings['dialStyle'] ?? 'standard'
+      sendMode.value = settings['sendMode'] ?? 'live'
+      idleSendMs.value = settings['idleSendMs'] ?? 500
       minSendIntervalMs.value = settings['minSendIntervalMs'] ?? 250
       deviceTimeoutMs.value = settings['deviceTimeoutMs'] ?? 3000
       optimisticDisplay.value = settings['optimisticDisplay'] !== false
@@ -828,6 +903,9 @@ function saveSettings() {
 
     rotationTickMultiplier: rotationTickMultiplier.value,
     rotationTickBucketSizeMs: rotationTickBucketSizeMs.value,
+    dialStyle: dialStyle.value,
+    sendMode: sendMode.value,
+    idleSendMs: idleSendMs.value,
     minSendIntervalMs: minSendIntervalMs.value,
     deviceTimeoutMs: deviceTimeoutMs.value,
     optimisticDisplay: optimisticDisplay.value,

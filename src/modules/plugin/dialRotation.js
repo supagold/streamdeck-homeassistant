@@ -15,6 +15,7 @@
 export const DIAL_DEFAULTS = Object.freeze({
   bucketMs: 100, // batching window for ticks before one service call
   minSendIntervalMs: 250, // at most one call per this long; slow devices queue commands and replay them late
+  idleSendMs: 500, // "When the dial stops" mode: send this long after the last tick
   deviceTimeoutMs: 3000, // wait up to this long for the device to reach the last target before the next call (0 = don't wait)
   ackPollMs: 100, // how often to look for the device having caught up while waiting
   readbackDelayMs: 800, // quiet time after the last send before the first read-back
@@ -92,6 +93,8 @@ export class DialRotation {
       ),
       deviceTimeoutMs: Math.max(0, finiteOr(s.deviceTimeoutMs, DIAL_DEFAULTS.deviceTimeoutMs)),
       readbackDelayMs: Math.max(0, finiteOr(s.readbackDelayMs, DIAL_DEFAULTS.readbackDelayMs)),
+      idle: s.sendMode === 'idle',
+      idleSendMs: Math.max(0, finiteOr(s.idleSendMs, DIAL_DEFAULTS.idleSendMs)),
       optimisticDisplay: s.optimisticDisplay !== false,
       multiplier: finiteOr(s.rotationTickMultiplier, 1) || 1
     }
@@ -147,6 +150,12 @@ export class DialRotation {
       this.#scheduleRender(context)
     }
 
+    // "When the dial stops": every tick restarts the wait.
+    if (opts.idle && d.sendTimer) {
+      t.clearTimeout(d.sendTimer)
+      d.sendTimer = null
+    }
+
     // While a call is in flight further ticks only accumulate; #flush sends the
     // newest absolute target as soon as the call returns (no timer needed).
     if (d.sendTimer || d.sending) return
@@ -157,6 +166,10 @@ export class DialRotation {
   #scheduleSend(context, opts) {
     const d = this.#dials.get(context)
     if (!d) return
+    if (opts.idle) {
+      d.sendTimer = this.#deps.timers.setTimeout(() => this.#flush(context), opts.idleSendMs)
+      return
+    }
     const sinceLast = d.lastSendAt === null ? Infinity : this.#deps.now() - d.lastSendAt
     const delay = Math.max(opts.bucketMs, opts.minSendIntervalMs - sinceLast)
     if (delay > 0) {

@@ -11,6 +11,7 @@ import { EntityConfigFactory } from '@/modules/plugin/entityConfigFactoryNg'
 import { DialRotation } from '@/modules/plugin/dialRotation'
 import { createWorkerTimers } from '@/modules/common/workerTimers'
 import { applyPercent, percentFromState } from '@/modules/plugin/dialModel'
+import { LinkedDials, drawStrip, ROLE_COLOR, STRIP } from '@/modules/plugin/colorDial'
 import { SvgUtils, WIDTH, HEIGHT } from '@/modules/plugin/svgUtils'
 import { fetchRemoteYaml } from '@/modules/common/remoteConfig'
 import nunjucksEnv from '../modules/common/nunjucksEnv.js'
@@ -104,6 +105,32 @@ const dials = new DialRotation({
   log: (context, message) => $SD.value?.log(`dial ${context.slice(0, 6)}: ${message}`)
 })
 
+// Color and brightness dials on one light share a model. See src/modules/plugin/colorDial.js
+const isLinkedDial = (context) => {
+  const settings = actionSettings.value[context]
+  return (
+    settings?.controllerType === 'Encoder' &&
+    (settings?.dialStyle === 'color' || settings?.dialStyle === 'brightness')
+  )
+}
+const linkedDials = new LinkedDials({
+  getSettings: (context) => actionSettings.value[context],
+  getEntityId: displayEntityId,
+  getContexts: (entityId) =>
+    Object.keys(actionSettings.value).filter(
+      (context) => isLinkedDial(context) && displayEntityId(context) === entityId
+    ),
+  getState: (entityId) => lastStates.get(entityId),
+  send: sendLightData,
+  render: renderLinkedStrip,
+  timers: dialTimers,
+  log: (context, message) => $SD.value?.log(`dial ${context.slice(0, 6)}: ${message}`)
+})
+const linkedLayoutSet = new Set()
+const stripCanvas = document.createElement('canvas')
+stripCanvas.width = STRIP.width
+stripCanvas.height = STRIP.height
+
 onMounted(async () => {
   window.connectElgatoStreamDeckSocket = (inPort, inPluginUUID, inRegisterEvent, inInfo) => {
     $SD.value = new StreamDeck(inPort, inPluginUUID, inRegisterEvent, inInfo, '{}')
@@ -153,11 +180,13 @@ onMounted(async () => {
       delete actionSettings.value[context]
       renderGeneration.delete(context)
       dials.dispose(context)
+      linkedLayoutSet.delete(context)
       resubscribeEntities()
     })
 
     $SD.value.on('dialRotate', (message) => {
-      dials.rotate(message.context, message.payload.ticks)
+      if (isLinkedDial(message.context)) linkedDials.rotate(message.context, message.payload.ticks)
+      else dials.rotate(message.context, message.payload.ticks)
     })
 
     $SD.value.on('dialDown', (message) => {
@@ -177,6 +206,7 @@ onMounted(async () => {
 
     $SD.value.on('didReceiveSettings', (message) => {
       let context = message.context
+      linkedLayoutSet.delete(context)
       actionSettings.value[context] = Settings.parse(message.payload.settings)
       if ($HA.value) {
         $HA.value.getStatesDebounced(entityStatesChanged)
@@ -325,6 +355,10 @@ function updateState(stateMessage) {
   const enrichedState = cacheState(stateMessage)
 
   changedContexts.forEach((context) => {
+    if (isLinkedDial(context)) {
+      linkedDials.syncFromState(context, enrichedState)
+      return
+    }
     // A dial that is mid-turn keeps showing the value it is being turned to;
     // the read-back repaints it from the cached state when things have settled.
     if (dials.isPending(context)) return
@@ -406,6 +440,27 @@ function sendRotation(context, variables) {
   const settings = actionSettings.value[context]
   if (!settings) return Promise.resolve(false)
   return callService(context, settings.button.serviceRotation, variables, settings.display.entityId)
+}
+
+function renderLinkedStrip(context, view) {
+  if (!linkedLayoutSet.has(context)) {
+    $SD.value.setFeedbackLayout(context, { layout: 'layouts/color-dial.json' })
+    linkedLayoutSet.add(context)
+  }
+  drawStrip(stripCanvas.getContext('2d'), view)
+  $SD.value.setFeedback(context, { strip: stripCanvas.toDataURL('image/png') })
+}
+
+function sendLightData(entityId, data, context) {
+  if (!$HA.value) return Promise.resolve(false)
+  return $HA.value
+    .callService('light', 'turn_on', entityId, data)
+    .then(() => true)
+    .catch((e) => {
+      console.error(e)
+      if (context) $SD.value.showAlert(context)
+      return false
+    })
 }
 
 function isEncoder(contextSettings) {
@@ -523,6 +578,10 @@ function buttonUp(context) {
 function buttonShortPress(context) {
   let settings = actionSettings.value[context]
   if (!settings) return
+  if (isLinkedDial(context) && settings.dialStyle === ROLE_COLOR) {
+    linkedDials.toggleMode(context)
+    return
+  }
   callService(context, settings.button.serviceShortPress)
 }
 
@@ -533,7 +592,7 @@ function buttonLongPress(context) {
   if (settings.button.serviceLongPress.serviceId) {
     callService(context, settings.button.serviceLongPress)
   } else {
-    callService(context, settings.button.serviceShortPress)
+    buttonShortPress(context)
   }
 }
 
