@@ -414,10 +414,34 @@
           step="50"
           type="range"
         />
-        <div class="pi-hint mb-2">
+        <div class="pi-hint mb-3">
           Aggregates ticks for this duration before firing the service call. Zero = one call per
           tick.
         </div>
+
+        <PiToggleRow id="chkOptimisticDisplay" v-model="optimisticDisplay" label="Instant feedback">
+          <div class="pi-hint mb-2">
+            Shows the new value on the dial while you turn it, sends it to Home Assistant, then
+            reads the real value back and corrects the display if it differs. Works for lights,
+            media players (volume), covers, fans and number entities.
+          </div>
+          <label class="pi-label" for="readbackDelayMs">
+            Read-back delay
+            <span class="pi-badge ms-1">{{ readbackDelayMs }} ms</span>
+          </label>
+          <input
+            id="readbackDelayMs"
+            v-model.number="readbackDelayMs"
+            class="pi-range"
+            max="3000"
+            min="100"
+            step="100"
+            type="range"
+          />
+          <div class="pi-hint mb-2">
+            How long after the last turn to wait before checking what Home Assistant reports.
+          </div>
+        </PiToggleRow>
       </div>
 
       <!-- ── Save button ───────────────────────────────────────────────────── -->
@@ -485,7 +509,9 @@ const serviceTap = ref({})
 const serviceRotation = ref({})
 
 const rotationTickMultiplier = ref(1)
-const rotationTickBucketSizeMs = ref(300)
+const rotationTickBucketSizeMs = ref(100)
+const optimisticDisplay = ref(true)
+const readbackDelayMs = ref(800)
 
 const useCustomTitle = ref(false)
 const buttonTitle = ref('{{friendly_name}}')
@@ -583,7 +609,9 @@ onMounted(() => {
       serviceTap.value = settings['button']['serviceTap']
       serviceRotation.value = settings['button']['serviceRotation']
       rotationTickMultiplier.value = settings['rotationTickMultiplier'] || 1
-      rotationTickBucketSizeMs.value = settings['rotationTickBucketSizeMs'] || 300
+      rotationTickBucketSizeMs.value = settings['rotationTickBucketSizeMs'] ?? 100
+      optimisticDisplay.value = settings['optimisticDisplay'] !== false
+      readbackDelayMs.value = settings['readbackDelayMs'] ?? 800
     })
   }
 })
@@ -757,7 +785,9 @@ function saveSettings() {
     },
 
     rotationTickMultiplier: rotationTickMultiplier.value,
-    rotationTickBucketSizeMs: rotationTickBucketSizeMs.value
+    rotationTickBucketSizeMs: rotationTickBucketSizeMs.value,
+    optimisticDisplay: optimisticDisplay.value,
+    readbackDelayMs: readbackDelayMs.value
   }
 
   $SD.saveSettings(settings)

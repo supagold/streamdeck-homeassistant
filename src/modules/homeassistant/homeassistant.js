@@ -79,6 +79,14 @@ export class Homeassistant {
     this._connection.sendMessagePromise({ type: 'get_states' }).then(callback)
   }
 
+  // Fresh state of one entity, bypassing the 2 s debounce of getStatesDebounced.
+  // Used for read-back after a dial turn; resolves null when unavailable.
+  async getState(entityId) {
+    if (!this._connection) return null
+    const states = await this._connection.sendMessagePromise({ type: 'get_states' })
+    return states.find((s) => s.entity_id === entityId) ?? null
+  }
+
   getServices(callback) {
     if (!this._connection) return
     this._connection.sendMessagePromise({ type: 'get_services' }).then(callback)

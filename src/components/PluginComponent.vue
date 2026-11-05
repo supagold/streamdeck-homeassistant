@@ -8,6 +8,8 @@ import { StreamDeck } from '@/modules/common/streamdeck'
 import { LruCache } from '@/modules/common/lruCache'
 import { Homeassistant } from '@/modules/homeassistant/homeassistant'
 import { EntityConfigFactory } from '@/modules/plugin/entityConfigFactoryNg'
+import { DialRotation } from '@/modules/plugin/dialRotation'
+import { applyPercent, percentFromState } from '@/modules/plugin/dialModel'
 import { SvgUtils, WIDTH, HEIGHT } from '@/modules/plugin/svgUtils'
 import { fetchRemoteYaml } from '@/modules/common/remoteConfig'
 import nunjucksEnv from '../modules/common/nunjucksEnv.js'
@@ -78,9 +80,22 @@ const renderGeneration = new Map()
 
 const activeStates = ref(defaultActiveStates)
 
-const rotationTimeout = {}
-const rotationAmount = {}
-const rotationPercent = {}
+// Latest known (enriched) state per entity, kept even while a dial is mid-turn.
+const lastStates = new Map()
+
+const entityDomain = (entityId) => entityId.split('.')[0]
+const displayEntityId = (context) => actionSettings.value[context]?.display.entityId
+
+// Dial turns: optimistic display -> batched service call -> read-back.
+// See src/modules/plugin/dialRotation.js
+const dials = new DialRotation({
+  getSettings: (context) => actionSettings.value[context],
+  getInitialPercent: knownPercent,
+  send: sendRotation,
+  render: renderOptimistic,
+  readback: readbackState,
+  settle: settleDial
+})
 
 onMounted(async () => {
   window.connectElgatoStreamDeckSocket = (inPort, inPluginUUID, inRegisterEvent, inInfo) => {
@@ -118,12 +133,6 @@ onMounted(async () => {
 
     $SD.value.on('willAppear', (message) => {
       let context = message.context
-      rotationAmount[context] = 0
-      // Keep accumulated rotationPercent across page changes (willAppear fires
-      // on every page switch for the same context); only initialise once.
-      if (rotationPercent[context] === undefined) {
-        rotationPercent[context] = 0
-      }
       actionSettings.value[context] = Settings.parse(message.payload.settings)
       if ($HA.value) {
         $HA.value.getStatesDebounced(entityStatesChanged)
@@ -135,41 +144,12 @@ onMounted(async () => {
       let context = message.context
       delete actionSettings.value[context]
       renderGeneration.delete(context)
+      dials.dispose(context)
       resubscribeEntities()
     })
 
     $SD.value.on('dialRotate', (message) => {
-      let context = message.context
-      let settings = actionSettings.value[context]
-      if (!settings) return
-      let scaledTicks = message.payload.ticks * (settings.rotationTickMultiplier || 1)
-      let tickBucketSizeMs = settings.rotationTickBucketSizeMs || 300
-
-      rotationAmount[context] += scaledTicks
-      rotationPercent[context] += scaledTicks
-      if (rotationPercent[context] < 0) {
-        rotationPercent[context] = 0
-      } else if (rotationPercent[context] > 100) {
-        rotationPercent[context] = 100
-      }
-
-      if (rotationTimeout[context]) return
-
-      let serviceCall = () => {
-        callService(context, settings.button.serviceRotation, {
-          ticks: rotationAmount[context],
-          rotationPercent: rotationPercent[context],
-          rotationAbsolute: 2.55 * rotationPercent[context]
-        })
-        rotationAmount[context] = 0
-        rotationTimeout[context] = null
-      }
-
-      if (tickBucketSizeMs > 0) {
-        rotationTimeout[context] = setTimeout(serviceCall, tickBucketSizeMs)
-      } else {
-        serviceCall()
-      }
+      dials.rotate(message.context, message.payload.ticks)
     })
 
     $SD.value.on('dialDown', (message) => {
@@ -189,10 +169,6 @@ onMounted(async () => {
 
     $SD.value.on('didReceiveSettings', (message) => {
       let context = message.context
-      rotationAmount[context] = 0
-      if (rotationPercent[context] === undefined) {
-        rotationPercent[context] = 0
-      }
       actionSettings.value[context] = Settings.parse(message.payload.settings)
       if ($HA.value) {
         $HA.value.getStatesDebounced(entityStatesChanged)
@@ -334,11 +310,22 @@ function updateState(stateMessage) {
     return
   }
 
-  let domain = stateMessage.entity_id.split('.')[0]
-  let changedContexts = Object.keys(actionSettings.value).filter(
+  const domain = entityDomain(stateMessage.entity_id)
+  const changedContexts = Object.keys(actionSettings.value).filter(
     (key) => actionSettings.value[key].display.entityId === stateMessage.entity_id
   )
+  const enrichedState = cacheState(stateMessage)
 
+  changedContexts.forEach((context) => {
+    // A dial that is mid-turn keeps showing the value it is being turned to;
+    // the read-back repaints it from the cached state when things have settled.
+    if (dials.isPending(context)) return
+    renderState(context, domain, enrichedState)
+    dials.syncFromState(context, percentFromState(domain, enrichedState))
+  })
+}
+
+function enrichState(stateMessage) {
   const enrichedState = {
     ...stateMessage,
     attributes: { ...stateMessage.attributes }
@@ -347,16 +334,70 @@ function updateState(stateMessage) {
     enrichedState.attributes['last_updated'] = new Date(enrichedState.last_updated).toLocaleTimeString()
   if (enrichedState.last_changed != null)
     enrichedState.attributes['last_changed'] = new Date(enrichedState.last_changed).toLocaleTimeString()
+  return enrichedState
+}
 
-  changedContexts.forEach((context) => {
-    const generation = (renderGeneration.get(context) ?? 0) + 1
-    renderGeneration.set(context, generation)
-    updateContextState(context, domain, enrichedState, generation).catch((e) => {
-      console.error(e)
-      $SD.value.setImage(context, null)
-      $SD.value.showAlert(context)
-    })
+function cacheState(stateMessage) {
+  const enrichedState = enrichState(stateMessage)
+  lastStates.set(enrichedState.entity_id, enrichedState)
+  return enrichedState
+}
+
+// Starts a render and makes it the newest for the context; older async renders
+// that finish later are discarded by the generation check in updateContextState.
+function renderState(context, domain, state) {
+  const generation = (renderGeneration.get(context) ?? 0) + 1
+  renderGeneration.set(context, generation)
+  return updateContextState(context, domain, state, generation).catch((e) => {
+    console.error(e)
+    $SD.value.setImage(context, null)
+    $SD.value.showAlert(context)
   })
+}
+
+// ── Dial support (see DialRotation) ──────────────────────────────────────────
+
+// Where the entity really is, 0-100, or null when unknown / not a supported domain.
+function knownPercent(context) {
+  const entityId = displayEntityId(context)
+  const state = entityId && lastStates.get(entityId)
+  return state ? percentFromState(entityDomain(entityId), state) : null
+}
+
+// Draw the entity as it would look at `percent`, ahead of Home Assistant.
+function renderOptimistic(context, percent) {
+  const entityId = displayEntityId(context)
+  const base = entityId && lastStates.get(entityId)
+  if (!base) return
+  const domain = entityDomain(entityId)
+  const state = applyPercent(domain, base, percent)
+  if (!state) return
+  return renderState(context, domain, state)
+}
+
+// Ask Home Assistant what the entity really is now; caches it (no repaint).
+async function readbackState(context) {
+  const entityId = displayEntityId(context)
+  if (!entityId || !$HA.value) return null
+  const state = await $HA.value.getState(entityId)
+  if (!state) return null
+  return percentFromState(entityDomain(entityId), cacheState(state))
+}
+
+// The dial is no longer pending: paint the real, cached state.
+function settleDial(context) {
+  const entityId = displayEntityId(context)
+  const state = entityId && lastStates.get(entityId)
+  if (!state) return
+  const domain = entityDomain(entityId)
+  renderState(context, domain, state)
+  dials.syncFromState(context, percentFromState(domain, state))
+}
+
+function sendRotation(context, variables) {
+  const settings = actionSettings.value[context]
+  if (!settings) return Promise.resolve(false)
+  return callService(context, settings.button.serviceRotation, variables, settings.display.entityId)
 }
 
 function isEncoder(contextSettings) {
@@ -378,10 +419,6 @@ async function updateContextState(currentContext, domain, stateObject, generatio
   renderingConfig.isMultiAction =
     contextSettings.button.serviceLongPress.serviceId && showIndicators
   renderingConfig.labelFontSize = contextSettings.display.labelFontSize ?? DEFAULT_LABEL_FONT_SIZE
-
-  if (renderingConfig.rotationPercent !== undefined) {
-    rotationPercent[currentContext] = renderingConfig.rotationPercent
-  }
 
   if (contextSettings.display.useCustomTitle) {
     let state = stateObject.state
@@ -492,8 +529,12 @@ function buttonLongPress(context) {
   }
 }
 
-function callService(context, serviceToCall, serviceDataAttributes = {}) {
-  if (!serviceToCall['serviceId']) return
+// Resolves true when the call was made and accepted, false otherwise (an alert is
+// shown on failure). Callers that don't care can ignore the result.
+// `fallbackEntityId`: used as the target when the call has none of its own and the
+// service is in the same domain as that entity (rotation has no entity field in the UI).
+function callService(context, serviceToCall, serviceDataAttributes = {}, fallbackEntityId = '') {
+  if (!serviceToCall['serviceId']) return Promise.resolve(false)
 
   try {
     let serviceData = null
@@ -509,24 +550,29 @@ function callService(context, serviceToCall, serviceDataAttributes = {}) {
       const url = serviceData?.url
       if (url) {
         $SD.value.openUrl(url)
-      } else {
-        $SD.value.showAlert(context)
+        return Promise.resolve(true)
       }
-      return
+      $SD.value.showAlert(context)
+      return Promise.resolve(false)
     }
 
     const serviceIdParts = serviceToCall.serviceId.split('.')
-    if ($HA.value) {
-      $HA.value
-        .callService(serviceIdParts[0], serviceIdParts[1], serviceToCall.entityId, serviceData)
-        .catch((e) => {
-          console.error(e)
-          $SD.value.showAlert(context)
-        })
-    }
+    const entityId =
+      serviceToCall.entityId ||
+      (fallbackEntityId && entityDomain(fallbackEntityId) === serviceIdParts[0] ? fallbackEntityId : '')
+    if (!$HA.value) return Promise.resolve(false)
+    return $HA.value
+      .callService(serviceIdParts[0], serviceIdParts[1], entityId, serviceData)
+      .then(() => true)
+      .catch((e) => {
+        console.error(e)
+        $SD.value.showAlert(context)
+        return false
+      })
   } catch (e) {
     console.error(e)
     $SD.value.showAlert(context)
+    return Promise.resolve(false)
   }
 }
 </script>
