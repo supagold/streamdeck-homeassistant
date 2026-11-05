@@ -58,6 +58,14 @@ same light always agree.
   its marker, and it settles only after the light's reports have gone quiet (a slow light can report old
   values for seconds). Code: `src/modules/plugin/colorDial.js`.
 
+### Look (light dial styles)
+
+- The color dial shows the nearest named hue instead of degrees: about one name per 3.6 degrees of the
+  wheel, picked from the xkcd color name survey (CC0). See `src/modules/plugin/hueNames.js`.
+- **Rounded corners** (`stripCorners`: `both`, `left`, `right`, `none`): a square side runs flush so
+  neighboring dials join into one block. For two dials, round the left side of the left dial and the right
+  side of the right dial.
+
 ### Sending (all dial styles)
 
 | Setting | Default | Notes |

@@ -3,6 +3,8 @@ import {
   BAR,
   STRIP,
   drawStrip,
+  CORNER,
+  cornersFor,
   hueName,
   hueToRgb,
   HUE_NAMES,
@@ -112,24 +114,96 @@ describe('reading state and colors', () => {
 })
 
 describe('hueName', () => {
-  it('names the nearest well-known hue', () => {
+  it('names each table hue as itself', () => {
+    for (const [hue, name] of HUE_NAMES) expect(hueName(hue)).toBe(name)
+  })
+
+  it('picks the nearest named hue between entries', () => {
     expect(hueName(0)).toBe('Red')
-    expect(hueName(60)).toBe('Yellow')
-    expect(hueName(121)).toBe('Green')
-    expect(hueName(238)).toBe('Blue')
-    expect(hueName(300)).toBe('Magenta')
+    expect(hueName(180)).toBe('Cyan')
+    expect(hueName(60.4)).toBe(hueName(59.5))
   })
 
   it('wraps around red in both directions', () => {
+    expect(hueName(-1)).toBe(hueName(359))
+    expect(hueName(361)).toBe(hueName(1))
+    expect(hueName(357)).toBe('Bright Red')
     expect(hueName(359)).toBe('Red')
-    expect(hueName(-2)).toBe('Red')
-    expect(hueName(362)).toBe('Red')
-    expect(hueName(355)).toBe('Red')
+    expect(hueName(1)).toBe('Red')
   })
 
-  it('gives every hue on the bar a name', () => {
-    for (let hue = 0; hue < 360; hue += 1.4) expect(hueName(hue)).toBeTruthy()
+  it('has about one distinct name per 3.6 degrees, sorted, all short enough to fit', () => {
+    expect(HUE_NAMES.length).toBeGreaterThanOrEqual(90)
     expect(new Set(HUE_NAMES.map((entry) => entry[1])).size).toBe(HUE_NAMES.length)
+    const hues = HUE_NAMES.map((entry) => entry[0])
+    expect(hues).toEqual([...hues].sort((a, b) => a - b))
+    expect(Math.max(...HUE_NAMES.map((entry) => entry[1].length))).toBeLessThanOrEqual(15)
+    // no gap on the wheel larger than 12 degrees, so every tick of the default speed gets a new name
+    for (let i = 0; i < hues.length; i++) {
+      const next = i + 1 < hues.length ? hues[i + 1] : hues[0] + 360
+      expect(next - hues[i]).toBeLessThanOrEqual(12)
+    }
+  })
+
+  it('shows a different name on neighboring ticks at the default speed', () => {
+    let changes = 0
+    for (let tick = 0; tick < 50; tick++) {
+      if (hueName(tick * 7.2) !== hueName((tick + 1) * 7.2)) changes++
+    }
+    expect(changes).toBe(50)
+  })
+})
+
+describe('cornersFor and strip corners', () => {
+  it('rounds the requested sides', () => {
+    expect(cornersFor(undefined)).toEqual({ left: true, right: true })
+    expect(cornersFor('both')).toEqual({ left: true, right: true })
+    expect(cornersFor('left')).toEqual({ left: true, right: false })
+    expect(cornersFor('right')).toEqual({ left: false, right: true })
+    expect(cornersFor('none')).toEqual({ left: false, right: false })
+  })
+
+  function drawn(corners) {
+    const radii = []
+    const rects = []
+    const ctx = {
+      fillStyle: null,
+      fillRect: () => {},
+      beginPath: () => {},
+      roundRect: (x, y, w, h, r) => rects.push({ x, y, w, h, r }),
+      fill: () => {},
+      createLinearGradient: () => ({ addColorStop() {} }),
+      fillText: () => {},
+      measureText: () => ({ width: 10 })
+    }
+    const view = viewFor(
+      ROLE_COLOR,
+      { mode: MODE_COLOR, colorPosition: 0.5, whitePosition: 0.5, brightness: 1 },
+      { min: 2000, max: 6000 }
+    )
+    drawStrip(ctx, { ...view, corners })
+    return { block: rects[0], radii }
+  }
+
+  it('runs flush on a square side and keeps a margin on a rounded one', () => {
+    const left = drawn('left').block
+    expect(left.x).toBeGreaterThan(0)
+    expect(left.x + left.w).toBe(STRIP.width)
+    expect(left.r).toEqual([CORNER, 0, 0, CORNER])
+    const right = drawn('right').block
+    expect(right.x).toBe(0)
+    expect(right.x + right.w).toBeLessThan(STRIP.width)
+    expect(right.r).toEqual([0, CORNER, CORNER, 0])
+    const none = drawn('none').block
+    expect(none.x).toBe(0)
+    expect(none.x + none.w).toBe(STRIP.width)
+    expect(none.r).toEqual([0, 0, 0, 0])
+  })
+
+  it('a dial passes its corner setting to its strip', () => {
+    const { dial, lastView } = setup(colorState(120), { stripCorners: 'left' })
+    dial.syncFromState('R', colorState(120))
+    expect(lastView().corners).toBe('left')
   })
 })
 

@@ -412,6 +412,21 @@
           shares its background with color dials on the same light.
         </div>
 
+        <template v-if="dialStyle !== 'standard'">
+          <label class="pi-label" for="stripCorners">Rounded corners</label>
+          <select id="stripCorners" v-model="stripCorners" class="form-select form-select-sm mb-1">
+            <option value="both">Both sides</option>
+            <option value="left">Left side only</option>
+            <option value="right">Right side only</option>
+            <option value="none">None</option>
+          </select>
+          <div class="pi-hint mb-3">
+            Neighboring dials join into one block when the sides that touch are square. For two
+            dials side by side, round the left side of the left dial and the right side of the right
+            dial.
+          </div>
+        </template>
+
         <label class="pi-label" for="sendMode">Update the light</label>
         <select id="sendMode" v-model="sendMode" class="form-select form-select-sm mb-1">
           <option value="live">While turning</option>
@@ -618,6 +633,7 @@ const serviceRotation = ref({})
 const rotationTickMultiplier = ref(1)
 const rotationTickBucketSizeMs = ref(100)
 const dialStyle = ref('standard')
+const stripCorners = ref('both')
 const sendMode = ref('live')
 const idleSendMs = ref(500)
 const minSendIntervalMs = ref(250)
@@ -723,6 +739,7 @@ onMounted(() => {
       rotationTickMultiplier.value = settings['rotationTickMultiplier'] || 1
       rotationTickBucketSizeMs.value = settings['rotationTickBucketSizeMs'] ?? 100
       dialStyle.value = settings['dialStyle'] ?? 'standard'
+      stripCorners.value = settings['stripCorners'] ?? 'both'
       sendMode.value = settings['sendMode'] ?? 'live'
       idleSendMs.value = settings['idleSendMs'] ?? 500
       minSendIntervalMs.value = settings['minSendIntervalMs'] ?? 250
@@ -904,6 +921,7 @@ function saveSettings() {
     rotationTickMultiplier: rotationTickMultiplier.value,
     rotationTickBucketSizeMs: rotationTickBucketSizeMs.value,
     dialStyle: dialStyle.value,
+    stripCorners: stripCorners.value,
     sendMode: sendMode.value,
     idleSendMs: idleSendMs.value,
     minSendIntervalMs: minSendIntervalMs.value,

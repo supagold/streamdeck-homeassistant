@@ -1,3 +1,5 @@
+import { HUE_NAMES } from './hueNames.js'
+
 // Linked light dials: one or more dials share a model of one light.
 //
 // A color dial picks a color (a hue bar that wraps) or a white temperature (a bar
@@ -25,6 +27,7 @@ export const COLOR_DIAL_DEFAULTS = Object.freeze({
   minBackground: 0.12 // keep a trace of the color at low brightness
 })
 
+export { HUE_NAMES }
 export const MODE_COLOR = 'color'
 export const MODE_WHITE = 'white'
 export const ROLE_COLOR = 'color'
@@ -142,31 +145,6 @@ export function viewFor(role, light, range) {
 
 const css = ([r, g, b]) => `rgb(${r},${g},${b})`
 
-// Well-known named hues at full saturation, from the CSS color names. There is no official
-// name for every one of the 256 steps on the bar, so the nearest named hue (in degrees) is shown.
-export const HUE_NAMES = Object.freeze([
-  [0, 'Red'],
-  [16, 'Orange Red'],
-  [33, 'Dark Orange'],
-  [39, 'Orange'],
-  [51, 'Gold'],
-  [60, 'Yellow'],
-  [90, 'Chartreuse'],
-  [120, 'Green'],
-  [150, 'Spring Green'],
-  [165, 'Aquamarine'],
-  [180, 'Cyan'],
-  [195, 'Sky Blue'],
-  [210, 'Azure'],
-  [225, 'Royal Blue'],
-  [240, 'Blue'],
-  [265, 'Violet'],
-  [285, 'Purple'],
-  [300, 'Magenta'],
-  [330, 'Hot Pink'],
-  [348, 'Crimson']
-])
-
 export function hueName(hue) {
   const h = ((hue % 360) + 360) % 360
   let best = HUE_NAMES[0]
@@ -186,8 +164,15 @@ const luminance = ([r, g, b]) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
 
 function roundedRect(ctx, x, y, w, h, r) {
   ctx.beginPath()
-  ctx.roundRect(x, y, w, h, Math.min(r, w / 2, h / 2))
+  ctx.roundRect(x, y, w, h, Array.isArray(r) ? r : Math.min(r, w / 2, h / 2))
   ctx.fill()
+}
+
+/** Which vertical edges of a strip are rounded: 'both' (default), 'left', 'right' or 'none'. */
+export function cornersFor(option) {
+  const left = option !== 'right' && option !== 'none'
+  const right = option !== 'left' && option !== 'none'
+  return { left, right }
 }
 
 /**
@@ -199,7 +184,17 @@ export function drawStrip(ctx, view) {
   ctx.fillStyle = '#000'
   ctx.fillRect(0, 0, STRIP.width, STRIP.height)
   ctx.fillStyle = css(view.background)
-  roundedRect(ctx, EDGE, EDGE, STRIP.width - EDGE * 2, STRIP.height - EDGE * 2, CORNER)
+  // Rounded edges leave a black margin; a square edge runs flush, so neighboring strips can
+  // join into one block that is rounded only at its far left and far right.
+  const { left, right } = cornersFor(view.corners)
+  const x0 = left ? EDGE : 0
+  const x1 = STRIP.width - (right ? EDGE : 0)
+  roundedRect(ctx, x0, EDGE, x1 - x0, STRIP.height - EDGE * 2, [
+    left ? CORNER : 0,
+    right ? CORNER : 0,
+    right ? CORNER : 0,
+    left ? CORNER : 0
+  ])
 
   const light = luminance(view.background) > 0.55
   const ink = light ? '#000' : '#fff'
@@ -360,13 +355,19 @@ export class LinkedDials {
     }
   }
 
-  #view(light, role) {
-    return viewFor(role, light, kelvinRange(this.#deps.getState(light.entityId)))
+  #view(light, context) {
+    const view = viewFor(
+      this.#role(context),
+      light,
+      kelvinRange(this.#deps.getState(light.entityId))
+    )
+    view.corners = this.#deps.getSettings(context)?.stripCorners ?? 'both'
+    return view
   }
 
   #renderAll(light) {
     for (const context of this.#deps.getContexts(light.entityId)) {
-      this.#deps.render(context, this.#view(light, this.#role(context)))
+      this.#deps.render(context, this.#view(light, context))
     }
   }
 
@@ -385,7 +386,7 @@ export class LinkedDials {
     if (light.color.pending) light.color.lastPushAt = now // still changing; see #settle
     if (light.brightnessChannel.pending) light.brightnessChannel.lastPushAt = now
     this.#adopt(light, state, !light.color.pending, !light.brightnessChannel.pending)
-    this.#deps.render(context, this.#view(light, this.#role(context)))
+    this.#deps.render(context, this.#view(light, context))
   }
 
   rotate(context, ticks) {
