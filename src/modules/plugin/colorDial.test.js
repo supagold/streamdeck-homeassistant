@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   BAR,
+  STRIP,
   drawStrip,
+  hueName,
   hueToRgb,
+  HUE_NAMES,
   kelvinRange,
   kelvinToRgb,
   LinkedDials,
@@ -108,6 +111,28 @@ describe('reading state and colors', () => {
   })
 })
 
+describe('hueName', () => {
+  it('names the nearest well-known hue', () => {
+    expect(hueName(0)).toBe('Red')
+    expect(hueName(60)).toBe('Yellow')
+    expect(hueName(121)).toBe('Green')
+    expect(hueName(238)).toBe('Blue')
+    expect(hueName(300)).toBe('Magenta')
+  })
+
+  it('wraps around red in both directions', () => {
+    expect(hueName(359)).toBe('Red')
+    expect(hueName(-2)).toBe('Red')
+    expect(hueName(362)).toBe('Red')
+    expect(hueName(355)).toBe('Red')
+  })
+
+  it('gives every hue on the bar a name', () => {
+    for (let hue = 0; hue < 360; hue += 1.4) expect(hueName(hue)).toBeTruthy()
+    expect(new Set(HUE_NAMES.map((entry) => entry[1])).size).toBe(HUE_NAMES.length)
+  })
+})
+
 describe('viewFor and drawStrip', () => {
   const light = {
     mode: MODE_COLOR,
@@ -134,7 +159,8 @@ describe('viewFor and drawStrip', () => {
           this.stops.push([o, c])
         }
       }),
-      fillText: (text) => texts.push(text)
+      fillText: (text) => texts.push(text),
+      measureText: (text) => ({ width: text.length * 10 })
     }
     return { ctx, rects, texts }
   }
@@ -155,27 +181,29 @@ describe('viewFor and drawStrip', () => {
     const { ctx, rects } = fakeCtx()
     drawStrip(ctx, viewFor(ROLE_COLOR, light, range))
     expect(rects.map((r) => r.fill)).toEqual([
+      '#000',
       expect.stringMatching(/^rgb/),
       '#000',
       expect.anything(),
       '#fff',
       '#000'
     ])
+    expect(rects[0]).toMatchObject({ x: 0, y: 0, w: STRIP.width, h: STRIP.height })
     const marker = rects.at(-1)
     expect(marker.x + marker.w / 2).toBeCloseTo(BAR.x + BAR.width / 2)
-    expect(rects[1].w).toBe(BAR.width + BAR.border * 2)
+    expect(rects[2].w).toBe(BAR.width + BAR.border * 2)
   })
 
-  it('shows a caption and the value as text', () => {
+  it('shows only the value as text, with no labels', () => {
     const color = fakeCtx()
     drawStrip(color.ctx, viewFor(ROLE_COLOR, light, range))
-    expect(color.texts).toEqual(['COLOR', '180°'])
+    expect(color.texts).toEqual(['Cyan'])
     const level = fakeCtx()
     drawStrip(level.ctx, viewFor(ROLE_BRIGHTNESS, light, range))
-    expect(level.texts).toEqual(['BRIGHTNESS', '50%'])
+    expect(level.texts).toEqual(['50%'])
     const white = fakeCtx()
     drawStrip(white.ctx, viewFor(ROLE_COLOR, { ...light, mode: MODE_WHITE }, range))
-    expect(white.texts).toEqual(['WHITE', '3000 K'])
+    expect(white.texts).toEqual(['3000 K'])
   })
 
   it('uses dark text on a light background and light text on a dark one', () => {
@@ -189,7 +217,7 @@ describe('viewFor and drawStrip', () => {
         get: () => used.at(-1)
       })
       drawStrip(ctx, viewFor(ROLE_COLOR, { ...light, colorPosition: 1 / 6, brightness }, range))
-      return used[1]
+      return used[2]
     }
     expect(inks(1)).toBe('#000')
     expect(inks(0.3)).toBe('#fff')

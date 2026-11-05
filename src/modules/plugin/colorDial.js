@@ -32,6 +32,8 @@ export const ROLE_BRIGHTNESS = 'brightness'
 
 export const STRIP = Object.freeze({ width: 200, height: 100 })
 export const BAR = Object.freeze({ x: 14, y: 74, width: 172, height: 12, border: 3 })
+export const EDGE = 3
+export const CORNER = 18
 export const MARKER = Object.freeze({ width: 6, overhang: 5, outline: 1.5 })
 const FONT = '-apple-system, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif'
 
@@ -117,7 +119,6 @@ export function viewFor(role, light, range) {
       position: light.brightness,
       background,
       base,
-      caption: 'Brightness',
       value: `${Math.round(light.brightness * 100)}%`
     }
   }
@@ -127,8 +128,7 @@ export function viewFor(role, light, range) {
         bar: 'hue',
         position: light.colorPosition,
         background,
-        caption: 'Color',
-        value: `${Math.round(light.colorPosition * 360) % 360}°`
+        value: hueName(light.colorPosition * 360)
       }
     : {
         role,
@@ -136,12 +136,51 @@ export function viewFor(role, light, range) {
         position: light.whitePosition,
         background,
         range,
-        caption: 'White',
         value: `${Math.round(kelvinAt(light.whitePosition, range) / 50) * 50} K`
       }
 }
 
 const css = ([r, g, b]) => `rgb(${r},${g},${b})`
+
+// Well-known named hues at full saturation, from the CSS color names. There is no official
+// name for every one of the 256 steps on the bar, so the nearest named hue (in degrees) is shown.
+export const HUE_NAMES = Object.freeze([
+  [0, 'Red'],
+  [16, 'Orange Red'],
+  [33, 'Dark Orange'],
+  [39, 'Orange'],
+  [51, 'Gold'],
+  [60, 'Yellow'],
+  [90, 'Chartreuse'],
+  [120, 'Green'],
+  [150, 'Spring Green'],
+  [165, 'Aquamarine'],
+  [180, 'Cyan'],
+  [195, 'Sky Blue'],
+  [210, 'Azure'],
+  [225, 'Royal Blue'],
+  [240, 'Blue'],
+  [265, 'Violet'],
+  [285, 'Purple'],
+  [300, 'Magenta'],
+  [330, 'Hot Pink'],
+  [348, 'Crimson']
+])
+
+export function hueName(hue) {
+  const h = ((hue % 360) + 360) % 360
+  let best = HUE_NAMES[0]
+  let bestDistance = Infinity
+  for (const entry of HUE_NAMES) {
+    const d = Math.abs(h - entry[0])
+    const distance = Math.min(d, 360 - d)
+    if (distance < bestDistance) {
+      best = entry
+      bestDistance = distance
+    }
+  }
+  return best[1]
+}
 
 const luminance = ([r, g, b]) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
 
@@ -152,27 +191,29 @@ function roundedRect(ctx, x, y, w, h, r) {
 }
 
 /**
- * Paint a strip on a 2D canvas context: the shared background, a caption and a large
- * value, then a slim black-bordered bar with a black marker. Text is white on dark
+ * Paint a strip on a 2D canvas context: the shared background, a large value, then a slim black-bordered bar with a black marker. Text is white on dark
  * backgrounds and black on light ones, so it stays readable at any color or brightness.
  */
 export function drawStrip(ctx, view) {
-  ctx.fillStyle = css(view.background)
+  // Black behind a rounded color block, so the corners read as rounded on the deck.
+  ctx.fillStyle = '#000'
   ctx.fillRect(0, 0, STRIP.width, STRIP.height)
+  ctx.fillStyle = css(view.background)
+  roundedRect(ctx, EDGE, EDGE, STRIP.width - EDGE * 2, STRIP.height - EDGE * 2, CORNER)
 
   const light = luminance(view.background) > 0.55
   const ink = light ? '#000' : '#fff'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = ink
-  ctx.globalAlpha = 0.7
-  ctx.font = `600 13px ${FONT}`
-  ctx.letterSpacing = '2px'
-  ctx.fillText(view.caption.toUpperCase(), STRIP.width / 2 + 1, 21)
-  ctx.globalAlpha = 1
-  ctx.letterSpacing = '0px'
-  ctx.font = `600 38px ${FONT}`
-  ctx.fillText(view.value, STRIP.width / 2, 62)
+  // Light weight, shrunk if needed so long names (Spring Green) fit inside the strip.
+  let size = 42
+  ctx.font = `300 ${size}px ${FONT}`
+  while (size > 22 && ctx.measureText(view.value).width > STRIP.width - 20) {
+    size -= 2
+    ctx.font = `300 ${size}px ${FONT}`
+  }
+  ctx.fillText(view.value, STRIP.width / 2, 55)
 
   ctx.fillStyle = '#000'
   roundedRect(
