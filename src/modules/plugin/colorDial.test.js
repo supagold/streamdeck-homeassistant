@@ -174,6 +174,7 @@ describe('cornersFor and strip corners', () => {
       fill: () => {},
       createLinearGradient: () => ({ addColorStop() {} }),
       fillText: () => {},
+      strokeText: () => {},
       measureText: () => ({ width: 10 })
     }
     const view = viewFor(
@@ -219,6 +220,8 @@ describe('viewFor and drawStrip', () => {
   function fakeCtx() {
     const rects = []
     const texts = []
+    const strokes = []
+    const fills = []
     let path = null
     const ctx = {
       fillStyle: null,
@@ -233,10 +236,14 @@ describe('viewFor and drawStrip', () => {
           this.stops.push([o, c])
         }
       }),
-      fillText: (text) => texts.push(text),
+      strokeText: (text) => strokes.push({ text, color: ctx.strokeStyle, width: ctx.lineWidth }),
+      fillText: (text) => {
+        texts.push(text)
+        fills.push({ text, color: ctx.fillStyle })
+      },
       measureText: (text) => ({ width: text.length * 10 })
     }
-    return { ctx, rects, texts }
+    return { ctx, rects, texts, strokes, fills }
   }
 
   it('dims the same background for both roles', () => {
@@ -280,21 +287,48 @@ describe('viewFor and drawStrip', () => {
     expect(white.texts).toEqual(['3000 K'])
   })
 
-  it('uses dark text on a light background and light text on a dark one', () => {
-    const inks = (brightness) => {
-      const { ctx } = fakeCtx()
-      const used = []
-      Object.defineProperty(ctx, 'fillStyle', {
-        set: (v) => {
-          used.push(v)
-        },
-        get: () => used.at(-1)
-      })
-      drawStrip(ctx, viewFor(ROLE_COLOR, { ...light, colorPosition: 1 / 6, brightness }, range))
-      return used[2]
+  it('draws white text with a black outline on every color and brightness', () => {
+    for (const hue of [0, 60, 120, 240]) {
+      for (const brightness of [0.1, 0.5, 1]) {
+        const { ctx, strokes, fills } = fakeCtx()
+        drawStrip(ctx, {
+          ...viewFor(ROLE_COLOR, { ...light, colorPosition: hue / 360, brightness }, range)
+        })
+        expect(fills.at(-1).color).toBe('#ffffff')
+        expect(strokes.at(-1).color).toBe('#000000')
+      }
     }
-    expect(inks(1)).toBe('#000')
-    expect(inks(0.3)).toBe('#fff')
+  })
+
+  it('outlines the value before filling it, so the fill stays on top', () => {
+    const order = []
+    const { ctx } = fakeCtx()
+    const stroke = ctx.strokeText
+    const fill = ctx.fillText
+    ctx.strokeText = (...a) => (order.push('stroke'), stroke(...a))
+    ctx.fillText = (...a) => (order.push('fill'), fill(...a))
+    drawStrip(ctx, viewFor(ROLE_COLOR, light, range))
+    expect(order).toEqual(['stroke', 'fill'])
+  })
+
+  it('uses the configured text and outline colors', () => {
+    const { ctx, strokes, fills } = fakeCtx()
+    drawStrip(ctx, {
+      ...viewFor(ROLE_COLOR, light, range),
+      textColor: '#000000',
+      outlineColor: '#ffffff'
+    })
+    expect(fills.at(-1).color).toBe('#000000')
+    expect(strokes.at(-1).color).toBe('#ffffff')
+  })
+
+  it('a dial passes its text colors to its strip, ignoring invalid ones', () => {
+    const custom = setup(colorState(120), { textColor: '#102030', outlineColor: '#aabbcc' })
+    custom.dial.syncFromState('R', colorState(120))
+    expect(custom.lastView()).toMatchObject({ textColor: '#102030', outlineColor: '#aabbcc' })
+    const bad = setup(colorState(120), { textColor: 'red', outlineColor: 42 })
+    bad.dial.syncFromState('R', colorState(120))
+    expect(bad.lastView()).toMatchObject({ textColor: '#ffffff', outlineColor: '#000000' })
   })
 
   it('keeps the marker visible at both ends', () => {

@@ -425,6 +425,31 @@
             dials side by side, round the left side of the left dial and the right side of the right
             dial.
           </div>
+
+          <label class="pi-label" for="textColor">Text color</label>
+          <div class="d-flex align-items-center mb-1">
+            <input
+              id="textColor"
+              v-model="textColor"
+              class="form-control form-control-color"
+              type="color"
+            />
+            <span class="pi-badge ms-2">{{ textColor }}</span>
+          </div>
+          <label class="pi-label" for="outlineColor">Text outline</label>
+          <div class="d-flex align-items-center mb-1">
+            <input
+              id="outlineColor"
+              v-model="outlineColor"
+              class="form-control form-control-color"
+              type="color"
+            />
+            <span class="pi-badge ms-2">{{ outlineColor }}</span>
+          </div>
+          <div class="pi-hint mb-3">
+            The value text is drawn in one color with an outline in another, so it stays readable on
+            every color. White text with a black outline is the default.
+          </div>
         </template>
 
         <label class="pi-label" for="sendMode">Update the light</label>
@@ -634,6 +659,8 @@ const rotationTickMultiplier = ref(1)
 const rotationTickBucketSizeMs = ref(100)
 const dialStyle = ref('standard')
 const stripCorners = ref('both')
+const textColor = ref('#ffffff')
+const outlineColor = ref('#000000')
 const sendMode = ref('live')
 const idleSendMs = ref(500)
 const minSendIntervalMs = ref(250)
@@ -740,6 +767,8 @@ onMounted(() => {
       rotationTickBucketSizeMs.value = settings['rotationTickBucketSizeMs'] ?? 100
       dialStyle.value = settings['dialStyle'] ?? 'standard'
       stripCorners.value = settings['stripCorners'] ?? 'both'
+      textColor.value = settings['textColor'] ?? '#ffffff'
+      outlineColor.value = settings['outlineColor'] ?? '#000000'
       sendMode.value = settings['sendMode'] ?? 'live'
       idleSendMs.value = settings['idleSendMs'] ?? 500
       minSendIntervalMs.value = settings['minSendIntervalMs'] ?? 250
@@ -922,6 +951,8 @@ function saveSettings() {
     rotationTickBucketSizeMs: rotationTickBucketSizeMs.value,
     dialStyle: dialStyle.value,
     stripCorners: stripCorners.value,
+    textColor: textColor.value,
+    outlineColor: outlineColor.value,
     sendMode: sendMode.value,
     idleSendMs: idleSendMs.value,
     minSendIntervalMs: minSendIntervalMs.value,

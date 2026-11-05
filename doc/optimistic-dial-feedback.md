@@ -66,6 +66,9 @@ same light always agree.
   neighboring dials join into one block. For two dials, round the left side of the left dial and the right
   side of the right dial.
 
+- **Text color** and **Text outline** (`textColor`, `outlineColor`): the value is drawn in one color with an
+  outline in another, the same on every background. Default is white with a black outline.
+
 ### Sending (all dial styles)
 
 | Setting | Default | Notes |

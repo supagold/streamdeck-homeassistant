@@ -35,6 +35,9 @@ export const ROLE_BRIGHTNESS = 'brightness'
 
 export const STRIP = Object.freeze({ width: 200, height: 100 })
 export const BAR = Object.freeze({ x: 14, y: 74, width: 172, height: 12, border: 3 })
+export const DEFAULT_TEXT_COLOR = '#ffffff'
+export const DEFAULT_OUTLINE_COLOR = '#000000'
+const OUTLINE = 4
 export const EDGE = 3
 export const CORNER = 18
 export const MARKER = Object.freeze({ width: 6, overhang: 5, outline: 1.5 })
@@ -145,6 +148,11 @@ export function viewFor(role, light, range) {
 
 const css = ([r, g, b]) => `rgb(${r},${g},${b})`
 
+/** A #rrggbb color, or undefined for anything else (so a bad setting falls back to the default). */
+export function validColor(value) {
+  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value : undefined
+}
+
 export function hueName(hue) {
   const h = ((hue % 360) + 360) % 360
   let best = HUE_NAMES[0]
@@ -159,8 +167,6 @@ export function hueName(hue) {
   }
   return best[1]
 }
-
-const luminance = ([r, g, b]) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
 
 function roundedRect(ctx, x, y, w, h, r) {
   ctx.beginPath()
@@ -196,11 +202,8 @@ export function drawStrip(ctx, view) {
     left ? CORNER : 0
   ])
 
-  const light = luminance(view.background) > 0.55
-  const ink = light ? '#000' : '#fff'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'alphabetic'
-  ctx.fillStyle = ink
   // Light weight, shrunk if needed so long names (Spring Green) fit inside the strip.
   let size = 42
   ctx.font = `300 ${size}px ${FONT}`
@@ -208,6 +211,13 @@ export function drawStrip(ctx, view) {
     size -= 2
     ctx.font = `300 ${size}px ${FONT}`
   }
+  // One text color with an outline in a second color keeps it readable on every background;
+  // both colors are settings (default white with a black outline).
+  ctx.lineJoin = 'round'
+  ctx.lineWidth = OUTLINE
+  ctx.strokeStyle = view.outlineColor ?? DEFAULT_OUTLINE_COLOR
+  ctx.strokeText(view.value, STRIP.width / 2, 55)
+  ctx.fillStyle = view.textColor ?? DEFAULT_TEXT_COLOR
   ctx.fillText(view.value, STRIP.width / 2, 55)
 
   ctx.fillStyle = '#000'
@@ -361,7 +371,10 @@ export class LinkedDials {
       light,
       kelvinRange(this.#deps.getState(light.entityId))
     )
-    view.corners = this.#deps.getSettings(context)?.stripCorners ?? 'both'
+    const settings = this.#deps.getSettings(context)
+    view.corners = settings?.stripCorners ?? 'both'
+    view.textColor = validColor(settings?.textColor) ?? DEFAULT_TEXT_COLOR
+    view.outlineColor = validColor(settings?.outlineColor) ?? DEFAULT_OUTLINE_COLOR
     return view
   }
 
