@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   BAR,
   STRIP,
+  TEXT_SIZES,
   drawStrip,
   CORNER,
   cornersFor,
@@ -239,7 +240,7 @@ describe('viewFor and drawStrip', () => {
       strokeText: (text) => strokes.push({ text, color: ctx.strokeStyle, width: ctx.lineWidth }),
       fillText: (text) => {
         texts.push(text)
-        fills.push({ text, color: ctx.fillStyle })
+        fills.push({ text, color: ctx.fillStyle, font: ctx.font })
       },
       measureText: (text) => ({ width: text.length * 10 })
     }
@@ -298,6 +299,30 @@ describe('viewFor and drawStrip', () => {
         expect(strokes.at(-1).color).toBe('#000000')
       }
     }
+  })
+
+  it('draws the value at the chosen size, and shrinks long values to fit', () => {
+    const sizeOf = (textSize, value) => {
+      const { ctx, fills } = fakeCtx()
+      drawStrip(ctx, { ...viewFor(ROLE_COLOR, light, range), textSize, value })
+      return Number(/(\d+)px/.exec(fills.at(-1).font)[1])
+    }
+    expect(sizeOf('small', 'Cyan')).toBe(TEXT_SIZES.small)
+    expect(sizeOf('medium', 'Cyan')).toBe(TEXT_SIZES.medium)
+    expect(sizeOf('large', 'Cyan')).toBe(TEXT_SIZES.large)
+    expect(sizeOf(undefined, 'Cyan')).toBe(TEXT_SIZES.medium)
+    // 21 characters is 210 wide at the fake 10px each, which never fits, so it shrinks to the minimum
+    const long = sizeOf('large', 'Bubble Gum Pink Extra')
+    expect(long).toBe(Math.round(TEXT_SIZES.large * 0.52))
+  })
+
+  it('a dial passes its text size to its strip, defaulting to medium', () => {
+    const large = setup(colorState(120), { textSize: 'large' })
+    large.dial.syncFromState('R', colorState(120))
+    expect(large.lastView().textSize).toBe('large')
+    const bad = setup(colorState(120), { textSize: 'huge' })
+    bad.dial.syncFromState('R', colorState(120))
+    expect(bad.lastView().textSize).toBe('medium')
   })
 
   it('outlines the value before filling it, so the fill stays on top', () => {

@@ -426,6 +426,13 @@
             dial.
           </div>
 
+          <label class="pi-label" for="textSize">Text size</label>
+          <select id="textSize" v-model="textSize" class="form-select form-select-sm mb-3">
+            <option value="small">Small</option>
+            <option value="medium">Medium</option>
+            <option value="large">Large</option>
+          </select>
+
           <label class="pi-label" for="textColor">Text color</label>
           <div class="d-flex align-items-center mb-1">
             <input
@@ -659,6 +666,7 @@ const rotationTickMultiplier = ref(1)
 const rotationTickBucketSizeMs = ref(100)
 const dialStyle = ref('standard')
 const stripCorners = ref('both')
+const textSize = ref('medium')
 const textColor = ref('#ffffff')
 const outlineColor = ref('#000000')
 const sendMode = ref('live')
@@ -767,6 +775,7 @@ onMounted(() => {
       rotationTickBucketSizeMs.value = settings['rotationTickBucketSizeMs'] ?? 100
       dialStyle.value = settings['dialStyle'] ?? 'standard'
       stripCorners.value = settings['stripCorners'] ?? 'both'
+      textSize.value = settings['textSize'] ?? 'medium'
       textColor.value = settings['textColor'] ?? '#ffffff'
       outlineColor.value = settings['outlineColor'] ?? '#000000'
       sendMode.value = settings['sendMode'] ?? 'live'
@@ -951,6 +960,7 @@ function saveSettings() {
     rotationTickBucketSizeMs: rotationTickBucketSizeMs.value,
     dialStyle: dialStyle.value,
     stripCorners: stripCorners.value,
+    textSize: textSize.value,
     textColor: textColor.value,
     outlineColor: outlineColor.value,
     sendMode: sendMode.value,

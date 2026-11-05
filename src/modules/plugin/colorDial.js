@@ -38,6 +38,8 @@ export const BAR = Object.freeze({ x: 14, y: 74, width: 172, height: 12, border:
 export const DEFAULT_TEXT_COLOR = '#ffffff'
 export const DEFAULT_OUTLINE_COLOR = '#000000'
 const OUTLINE = 4
+// Largest font size (px) per text size setting; long values are shrunk to fit from there.
+export const TEXT_SIZES = Object.freeze({ small: 30, medium: 42, large: 50 })
 export const EDGE = 3
 export const CORNER = 18
 export const MARKER = Object.freeze({ width: 6, overhang: 5, outline: 1.5 })
@@ -205,20 +207,22 @@ export function drawStrip(ctx, view) {
   ctx.textAlign = 'center'
   ctx.textBaseline = 'alphabetic'
   // Light weight, shrunk if needed so long names (Spring Green) fit inside the strip.
-  let size = 42
+  let size = TEXT_SIZES[view.textSize] ?? TEXT_SIZES.medium
+  const minSize = Math.round(size * 0.52)
   ctx.font = `300 ${size}px ${FONT}`
-  while (size > 22 && ctx.measureText(view.value).width > STRIP.width - 20) {
+  while (size > minSize && ctx.measureText(view.value).width > STRIP.width - 20) {
     size -= 2
     ctx.font = `300 ${size}px ${FONT}`
   }
+  const baseline = Math.round(40 + size * 0.36) // keeps the text centered above the bar
   // One text color with an outline in a second color keeps it readable on every background;
   // both colors are settings (default white with a black outline).
   ctx.lineJoin = 'round'
   ctx.lineWidth = OUTLINE
   ctx.strokeStyle = view.outlineColor ?? DEFAULT_OUTLINE_COLOR
-  ctx.strokeText(view.value, STRIP.width / 2, 55)
+  ctx.strokeText(view.value, STRIP.width / 2, baseline)
   ctx.fillStyle = view.textColor ?? DEFAULT_TEXT_COLOR
-  ctx.fillText(view.value, STRIP.width / 2, 55)
+  ctx.fillText(view.value, STRIP.width / 2, baseline)
 
   ctx.fillStyle = '#000'
   roundedRect(
@@ -373,6 +377,7 @@ export class LinkedDials {
     )
     const settings = this.#deps.getSettings(context)
     view.corners = settings?.stripCorners ?? 'both'
+    view.textSize = Object.hasOwn(TEXT_SIZES, settings?.textSize) ? settings.textSize : 'medium'
     view.textColor = validColor(settings?.textColor) ?? DEFAULT_TEXT_COLOR
     view.outlineColor = validColor(settings?.outlineColor) ?? DEFAULT_OUTLINE_COLOR
     return view
