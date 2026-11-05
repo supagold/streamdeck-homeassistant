@@ -3,12 +3,13 @@ import { DialRotation, DIAL_DEFAULTS } from './dialRotation.js'
 
 const CTX = 'ctx1'
 
-function harness({ settings = {}, initialPercent = 40, send, readback } = {}) {
+function harness({ settings = {}, initialPercent = 40, send, readback, peek = false } = {}) {
   const log = []
-  const state = { real: initialPercent }
+  const state = { real: initialPercent, seen: initialPercent }
   const deps = {
-    getSettings: () => settings,
+    getSettings: () => ({ minSendIntervalMs: 0, ...settings }),
     getInitialPercent: () => state.real,
+    peekPercent: peek ? () => state.seen : undefined,
     send: send ?? vi.fn(async (_c, vars) => (log.push(['send', vars]), true)),
     render: vi.fn(async (_c, pct) => void log.push(['render', pct])),
     readback: readback ?? vi.fn(async () => state.real),
@@ -150,12 +151,12 @@ describe('read-back', () => {
     expect(dial.isPending(CTX)).toBe(false)
   })
 
-  it('gives up after maxReadbacks and accepts what Home Assistant reports', async () => {
+  it('gives up once the value stops moving and accepts what Home Assistant reports', async () => {
     const { dial, deps, state } = harness({ settings: { rotationTickMultiplier: 5 } })
     dial.rotate(CTX, 4)
     state.real = 10 // never reaches target
     await vi.advanceTimersByTimeAsync(100 + 800 + DIAL_DEFAULTS.readbackRetryMs * 10)
-    expect(deps.readback).toHaveBeenCalledTimes(DIAL_DEFAULTS.maxReadbacks)
+    expect(deps.readback).toHaveBeenCalledTimes(DIAL_DEFAULTS.maxStalledReadbacks)
     expect(deps.settle).toHaveBeenCalledTimes(1)
     expect(dial.isPending(CTX)).toBe(false)
     // and the dial's position now follows reality
@@ -257,5 +258,193 @@ describe('state sync and cleanup', () => {
     expect(deps.send).toHaveBeenCalledTimes(2)
     expect(deps.send).toHaveBeenCalledWith('a', expect.objectContaining({ rotationPercent: 45 }))
     expect(deps.send).toHaveBeenCalledWith('b', expect.objectContaining({ rotationPercent: 35 }))
+  })
+})
+
+describe('in-flight sends', () => {
+  it('accumulates ticks while a call is in flight and then sends only the newest target', async () => {
+    let release
+    const gate = new Promise((r) => (release = r))
+    const sent = []
+    const send = vi.fn(async (_c, vars) => {
+      sent.push(vars)
+      if (sent.length === 1) await gate
+      return true
+    })
+    const { dial } = harness({
+      send,
+      settings: { rotationTickMultiplier: 5, rotationTickBucketSizeMs: 100 }
+    })
+    dial.rotate(CTX, 1) // 45
+    await vi.advanceTimersByTimeAsync(100) // first call starts, blocked on the gate
+    dial.rotate(CTX, 1) // 50
+    dial.rotate(CTX, 1) // 55
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(send).toHaveBeenCalledTimes(1) // nothing else goes out while in flight
+    release()
+    await vi.advanceTimersByTimeAsync(100) // queued ticks wait one batching window after the call returns
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(sent[1]).toEqual({ ticks: 10, rotationPercent: 55, rotationAbsolute: 2.55 * 55 })
+  })
+
+  it('does not schedule a read-back until the last call has returned and nothing is queued', async () => {
+    let release
+    const gate = new Promise((r) => (release = r))
+    let n = 0
+    const send = vi.fn(async () => {
+      if (++n === 1) await gate
+      return true
+    })
+    const { dial, deps } = harness({ send, settings: { rotationTickMultiplier: 5 } })
+    dial.rotate(CTX, 1)
+    await vi.advanceTimersByTimeAsync(100)
+    dial.rotate(CTX, 1)
+    release()
+    await vi.advanceTimersByTimeAsync(100) // queued ticks wait one batching window after the call returns
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(deps.readback).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(800)
+    expect(deps.readback).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('spacing calls for slow devices', () => {
+  it('sends at most one call per minimum interval, always with the newest target', async () => {
+    const { dial, deps } = harness({
+      settings: {
+        rotationTickMultiplier: 5,
+        rotationTickBucketSizeMs: 100,
+        minSendIntervalMs: 1000
+      }
+    })
+    for (let i = 0; i < 30; i++) {
+      dial.rotate(CTX, 1) // a notch every 100 ms for 3 s
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    await vi.advanceTimersByTimeAsync(2000)
+    const times = deps.send.mock.calls.length
+    expect(times).toBeLessThanOrEqual(5) // would be ~30 without spacing
+    expect(deps.send.mock.calls.at(-1)[1].rotationPercent).toBe(100) // 40 + 30 * 5, clamped
+  })
+
+  it('waits out the minimum gap after a call returns before sending queued ticks', async () => {
+    const { dial, deps } = harness({
+      settings: {
+        rotationTickMultiplier: 5,
+        rotationTickBucketSizeMs: 100,
+        minSendIntervalMs: 1000
+      }
+    })
+    dial.rotate(CTX, 1)
+    await vi.advanceTimersByTimeAsync(100) // first call goes out at t=100
+    dial.rotate(CTX, 1)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(deps.send).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(500) // t=1100: gap satisfied
+    expect(deps.send).toHaveBeenCalledTimes(2)
+  })
+
+  it('a first call after idle is not delayed by the minimum interval', async () => {
+    const { dial, deps } = harness({
+      settings: { rotationTickBucketSizeMs: 100, minSendIntervalMs: 1000 }
+    })
+    dial.rotate(CTX, 1)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(deps.send).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('read-back while a slow device catches up', () => {
+  it('keeps waiting while the value is still moving, beyond the stall limit', async () => {
+    const { dial, deps, state } = harness({ settings: { rotationTickMultiplier: 5 } })
+    dial.rotate(CTX, 12) // target 100
+    let i = 0
+    deps.readback.mockImplementation(async () => {
+      i++
+      state.real = Math.min(100, 40 + i * 5) // creeping upward, 5 points per look
+      return state.real
+    })
+    await vi.advanceTimersByTimeAsync(100 + 800 + DIAL_DEFAULTS.readbackRetryMs * 20)
+    expect(deps.readback.mock.calls.length).toBeGreaterThan(DIAL_DEFAULTS.maxStalledReadbacks)
+    expect(deps.settle).toHaveBeenCalledTimes(1)
+    expect(dial.isPending(CTX)).toBe(false)
+  })
+
+  it('still stops at the hard cap if the value keeps moving but never arrives', async () => {
+    const { dial, deps } = harness({ settings: { rotationTickMultiplier: 5 } })
+    dial.rotate(CTX, 12) // target 100
+    let i = 0
+    deps.readback.mockImplementation(async () => 20 + (i++ % 2) * 10) // wobbles 20/30 forever
+    await vi.advanceTimersByTimeAsync(
+      100 + 800 + DIAL_DEFAULTS.readbackRetryMs * (DIAL_DEFAULTS.maxReadbacks + 2)
+    )
+    expect(deps.readback).toHaveBeenCalledTimes(DIAL_DEFAULTS.maxReadbacks)
+    expect(deps.settle).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('waiting for the device between calls', () => {
+  const settings = {
+    rotationTickMultiplier: 5,
+    rotationTickBucketSizeMs: 100,
+    minSendIntervalMs: 0,
+    deviceTimeoutMs: 3000
+  }
+
+  it('holds the next call until the device reports the last target', async () => {
+    const { dial, deps, state } = harness({ settings, peek: true })
+    dial.rotate(CTX, 1) // target 45
+    await vi.advanceTimersByTimeAsync(100)
+    expect(deps.send).toHaveBeenCalledTimes(1)
+    dial.rotate(CTX, 1) // target 50, queued behind the first call
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(deps.send).toHaveBeenCalledTimes(1) // the device still shows 40: don't pile on
+    state.seen = 45 // the device caught up
+    await vi.advanceTimersByTimeAsync(200)
+    expect(deps.send).toHaveBeenCalledTimes(2)
+    expect(deps.send.mock.calls[1][1].rotationPercent).toBe(50)
+  })
+
+  it('stops waiting after the timeout when the device never reports', async () => {
+    const { dial, deps } = harness({ settings: { ...settings, deviceTimeoutMs: 1000 }, peek: true })
+    dial.rotate(CTX, 1)
+    await vi.advanceTimersByTimeAsync(100)
+    dial.rotate(CTX, 1)
+    await vi.advanceTimersByTimeAsync(800)
+    expect(deps.send).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(300) // 1000 ms after the first call
+    expect(deps.send).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not wait when disabled (deviceTimeoutMs 0)', async () => {
+    const { dial, deps } = harness({ settings: { ...settings, deviceTimeoutMs: 0 }, peek: true })
+    dial.rotate(CTX, 1)
+    await vi.advanceTimersByTimeAsync(100)
+    dial.rotate(CTX, 1)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(deps.send).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not wait before the very first call', async () => {
+    const { dial, deps, state } = harness({ settings, peek: true })
+    state.seen = 0 // device state unrelated to any earlier target
+    dial.rotate(CTX, 1)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(deps.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats an unknown device position as not caught up until the timeout', async () => {
+    const { dial, deps, state } = harness({
+      settings: { ...settings, deviceTimeoutMs: 600 },
+      peek: true
+    })
+    dial.rotate(CTX, 1)
+    await vi.advanceTimersByTimeAsync(100)
+    state.seen = null
+    dial.rotate(CTX, 1)
+    await vi.advanceTimersByTimeAsync(400)
+    expect(deps.send).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(deps.send).toHaveBeenCalledTimes(2)
   })
 })

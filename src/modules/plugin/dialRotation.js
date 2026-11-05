@@ -14,9 +14,13 @@
 
 export const DIAL_DEFAULTS = Object.freeze({
   bucketMs: 100, // batching window for ticks before one service call
+  minSendIntervalMs: 250, // at most one call per this long; slow devices queue commands and replay them late
+  deviceTimeoutMs: 3000, // wait up to this long for the device to reach the last target before the next call (0 = don't wait)
+  ackPollMs: 100, // how often to look for the device having caught up while waiting
   readbackDelayMs: 800, // quiet time after the last send before the first read-back
-  readbackRetryMs: 600, // wait between read-back retries while the value still differs
-  maxReadbacks: 4, // read-backs before accepting whatever Home Assistant reports
+  readbackRetryMs: 500, // wait between read-back retries while the value still differs
+  maxStalledReadbacks: 6, // consecutive read-backs showing no movement before accepting what Home Assistant reports
+  maxReadbacks: 24, // hard cap on read-backs per turn (~12 s) even if the value keeps moving
   tolerancePct: 4 // |real - target| within this counts as "matches"
 })
 
@@ -37,11 +41,14 @@ export class DialRotation {
    * @param {(context:string, vars:object)=>Promise<boolean>|boolean} deps.send   perform the rotation service call
    * @param {(context:string, percent:number)=>Promise<void>|void} deps.render    draw an optimistic position
    * @param {(context:string)=>Promise<number|null>} deps.readback   fetch fresh state; resolve its position (null = unavailable)
+   * @param {(context:string)=>number|null} [deps.peekPercent]       cheap look (no network) at the latest known real position; enables waiting for the device between calls
    * @param {(context:string)=>void} deps.settle                     draw the real, cached state once the dial is no longer pending
    * @param {{setTimeout:Function, clearTimeout:Function}} [deps.timers]
    */
   constructor(deps) {
     this.#deps = {
+      log: () => {}, // optional (context, message) sink for diagnosing timing problems
+      now: () => Date.now(),
       timers: {
         setTimeout: (...a) => setTimeout(...a),
         clearTimeout: (...a) => clearTimeout(...a)
@@ -58,6 +65,11 @@ export class DialRotation {
         amount: 0,
         optimistic: false,
         pending: false,
+        sending: false,
+        lastSendAt: null,
+        lastSentTarget: null,
+        lastReal: null,
+        stalled: 0,
         generation: 0,
         attempts: 0,
         sendTimer: null,
@@ -74,6 +86,11 @@ export class DialRotation {
     const s = settings ?? {}
     return {
       bucketMs: Math.max(0, finiteOr(s.rotationTickBucketSizeMs, DIAL_DEFAULTS.bucketMs)), // 0 is valid: one call per tick
+      minSendIntervalMs: Math.max(
+        0,
+        finiteOr(s.minSendIntervalMs, DIAL_DEFAULTS.minSendIntervalMs)
+      ),
+      deviceTimeoutMs: Math.max(0, finiteOr(s.deviceTimeoutMs, DIAL_DEFAULTS.deviceTimeoutMs)),
       readbackDelayMs: Math.max(0, finiteOr(s.readbackDelayMs, DIAL_DEFAULTS.readbackDelayMs)),
       optimisticDisplay: s.optimisticDisplay !== false,
       multiplier: finiteOr(s.rotationTickMultiplier, 1) || 1
@@ -118,6 +135,8 @@ export class DialRotation {
     // A new turn invalidates any read-back that is waiting or in flight.
     d.generation++
     d.attempts = 0
+    d.stalled = 0
+    d.lastReal = null
     if (d.readbackTimer) {
       t.clearTimeout(d.readbackTimer)
       d.readbackTimer = null
@@ -128,12 +147,52 @@ export class DialRotation {
       this.#scheduleRender(context)
     }
 
-    if (d.sendTimer) return
-    if (opts.bucketMs > 0) {
-      d.sendTimer = t.setTimeout(() => this.#flush(context), opts.bucketMs)
+    // While a call is in flight further ticks only accumulate; #flush sends the
+    // newest absolute target as soon as the call returns (no timer needed).
+    if (d.sendTimer || d.sending) return
+    this.#scheduleSend(context, opts)
+  }
+
+  // Wait out the batching window and the minimum gap since the previous call, whichever is longer.
+  #scheduleSend(context, opts) {
+    const d = this.#dials.get(context)
+    if (!d) return
+    const sinceLast = d.lastSendAt === null ? Infinity : this.#deps.now() - d.lastSendAt
+    const delay = Math.max(opts.bucketMs, opts.minSendIntervalMs - sinceLast)
+    if (delay > 0) {
+      d.sendTimer = this.#deps.timers.setTimeout(() => this.#flushWhenReady(context, opts), delay)
     } else {
-      this.#flush(context)
+      this.#flushWhenReady(context, opts)
     }
+  }
+
+  // Adaptive pacing: slow devices (cloud or Bluetooth lights) apply commands one at a time
+  // and replay a queue late. Hold the next call until the device reports it has reached
+  // the previous target, or the timeout passes, so no queue can build up.
+  #flushWhenReady(context, opts) {
+    const d = this.#dials.get(context)
+    if (!d) return
+    if (
+      opts.deviceTimeoutMs > 0 &&
+      this.#deps.peekPercent &&
+      d.lastSendAt !== null &&
+      d.lastSentTarget !== null
+    ) {
+      const waited = this.#deps.now() - d.lastSendAt
+      const seen = this.#deps.peekPercent(context)
+      const caughtUp =
+        seen !== null &&
+        seen !== undefined &&
+        Math.abs(seen - d.lastSentTarget) <= DIAL_DEFAULTS.tolerancePct
+      if (!caughtUp && waited < opts.deviceTimeoutMs) {
+        d.sendTimer = this.#deps.timers.setTimeout(
+          () => this.#flushWhenReady(context, opts),
+          Math.min(DIAL_DEFAULTS.ackPollMs, opts.deviceTimeoutMs - waited)
+        )
+        return
+      }
+    }
+    this.#flush(context)
   }
 
   #scheduleRender(context) {
@@ -165,16 +224,27 @@ export class DialRotation {
     const opts = this.#opts(settings)
     const vars = { ticks: d.amount, rotationPercent: d.percent, rotationAbsolute: 2.55 * d.percent }
     d.amount = 0
+    d.lastSendAt = this.#deps.now()
+    d.lastSentTarget = vars.rotationPercent
 
     let ok = false
+    d.sending = true
     try {
       ok = (await this.#deps.send(context, vars)) !== false
     } catch {
       ok = false
+    } finally {
+      d.sending = false
     }
+    this.#deps.log(
+      context,
+      `send ticks=${vars.ticks} target=${vars.rotationPercent.toFixed(1)} ok=${ok}`
+    )
 
     const current = this.#dials.get(context)
-    if (!current || !current.pending || current.sendTimer) return // disposed, not optimistic, or more ticks queued
+    if (!current) return // disposed while sending
+    if (current.amount !== 0) return this.#scheduleSend(context, opts) // turned further during the call: send the newest target, respecting the minimum gap
+    if (!current.pending || current.sendTimer) return // not optimistic, or another send is already scheduled
     const generation = current.generation
     if (current.readbackTimer) this.#deps.timers.clearTimeout(current.readbackTimer)
     // A failed call leaves the display wrong: look immediately.
@@ -197,10 +267,24 @@ export class DialRotation {
       real = null
     }
     if (!this.#dials.has(context) || d.generation !== generation) return // turned again while waiting
+    this.#deps.log(
+      context,
+      `readback #${d.attempts} real=${real === null ? 'null' : real.toFixed(1)} target=${d.percent.toFixed(1)}`
+    )
 
     const matches = real !== null && Math.abs(real - d.percent) <= DIAL_DEFAULTS.tolerancePct
-    if (!matches && real !== null && d.attempts < DIAL_DEFAULTS.maxReadbacks) {
-      // Probably still fading toward the target; look again shortly.
+    // Slow devices replay queued commands one by one, so a value that is still
+    // moving means "not there yet"; only give up once it has stopped moving.
+    const moved = real !== null && d.lastReal !== null && Math.abs(real - d.lastReal) > 0.5
+    d.stalled = moved ? 0 : d.stalled + 1
+    d.lastReal = real
+    if (
+      !matches &&
+      real !== null &&
+      d.stalled < DIAL_DEFAULTS.maxStalledReadbacks &&
+      d.attempts < DIAL_DEFAULTS.maxReadbacks
+    ) {
+      // Probably still catching up to the target; look again shortly.
       d.readbackTimer = this.#deps.timers.setTimeout(
         () => this.#readback(context, generation, opts),
         DIAL_DEFAULTS.readbackRetryMs
@@ -215,8 +299,11 @@ export class DialRotation {
     if (!d) return
     d.pending = false
     d.attempts = 0
+    d.stalled = 0
+    d.lastReal = null
     d.dirty = false
     if (real !== null) d.percent = clamp(real, 0, 100)
+    this.#deps.log(context, `settle on real=${real === null ? 'null' : real.toFixed(1)}`)
     this.#deps.settle(context)
   }
 

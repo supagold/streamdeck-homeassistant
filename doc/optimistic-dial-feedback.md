@@ -26,6 +26,8 @@ benefits from the shorter batching window and the entity fallback below.
 | Tick bucket size | 100 ms | `0` now really means one call per tick (it used to be treated as 300) |
 | Instant feedback | on | `optimisticDisplay` |
 | Read-back delay | 800 ms | `readbackDelayMs` |
+| Minimum send interval | 250 ms | `minSendIntervalMs` |
+| Device wait timeout | 3000 ms | `deviceTimeoutMs`: wait for the device to reach the last target before the next call; `0` turns this off |
 
 Existing actions keep whatever bucket size they saved; the new settings default when missing, so no settings
 migration is needed.
@@ -37,6 +39,16 @@ migration is needed.
   entity reached Home Assistant with no target.
 - The dial position is initialised from the real entity state. Before, `rotationPercent` counted up from 0
   regardless of the light's actual brightness.
+- Timers run in a Web Worker (`workerTimers.js`), because Chromium clamps timers in the hidden plugin page to
+  about once per second.
+- Only one service call is in flight per dial, and the next waits for the minimum interval and the device.
+
+## Known limitation: slow lights
+
+With the same build and settings, a Yeelight lamp and a Lutron Caseta dimmer showed no visible jumping and
+reached their targets on the first read-back. A Govee H6056 light bar controlled through MQTT still visibly
+jumps back during a turn. Its reported brightness also fell during one turn while the calls sent were all rising.
+The cause on the Govee path has not been established, and the behaviour was accepted rather than fixed.
 
 ## Code map
 
@@ -45,4 +57,5 @@ migration is needed.
   Home Assistant dependencies; everything is injected.
 - `src/modules/homeassistant/homeassistant.js`: `getState(entityId)` for the read-back.
 - `src/components/PluginComponent.vue`: wires the controller to rendering and service calls.
-- Tests: `dialModel.test.js`, `dialRotation.test.js` (`npm test`).
+- `src/modules/common/workerTimers.js`: timers that are not clamped in the hidden page.
+- Tests: `dialModel.test.js`, `dialRotation.test.js`, `workerTimers.test.js` (`npm test`).

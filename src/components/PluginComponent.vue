@@ -9,6 +9,7 @@ import { LruCache } from '@/modules/common/lruCache'
 import { Homeassistant } from '@/modules/homeassistant/homeassistant'
 import { EntityConfigFactory } from '@/modules/plugin/entityConfigFactoryNg'
 import { DialRotation } from '@/modules/plugin/dialRotation'
+import { createWorkerTimers } from '@/modules/common/workerTimers'
 import { applyPercent, percentFromState } from '@/modules/plugin/dialModel'
 import { SvgUtils, WIDTH, HEIGHT } from '@/modules/plugin/svgUtils'
 import { fetchRemoteYaml } from '@/modules/common/remoteConfig'
@@ -86,6 +87,8 @@ const lastStates = new Map()
 const entityDomain = (entityId) => entityId.split('.')[0]
 const displayEntityId = (context) => actionSettings.value[context]?.display.entityId
 
+const dialTimers = createWorkerTimers()
+
 // Dial turns: optimistic display -> batched service call -> read-back.
 // See src/modules/plugin/dialRotation.js
 const dials = new DialRotation({
@@ -94,7 +97,11 @@ const dials = new DialRotation({
   send: sendRotation,
   render: renderOptimistic,
   readback: readbackState,
-  settle: settleDial
+  settle: settleDial,
+  peekPercent: knownPercent,
+  // Hidden plugin pages clamp setTimeout to ~1 s; worker timers keep their precision.
+  timers: dialTimers,
+  log: (context, message) => $SD.value?.log(`dial ${context.slice(0, 6)}: ${message}`)
 })
 
 onMounted(async () => {
@@ -103,6 +110,7 @@ onMounted(async () => {
 
     $SD.value.on('globalsettings', (inGlobalSettings) => {
       $SD.value.log('Got global settings.')
+      $SD.value.log(`dial timers: ${dialTimers.kind}`)
       const originalJson = JSON.stringify(inGlobalSettings)
       const migratedSettings = GlobalSettings.migrate(inGlobalSettings)
       if (JSON.stringify(migratedSettings) !== originalJson) {

@@ -419,6 +419,44 @@
           tick.
         </div>
 
+        <label class="pi-label" for="minSendIntervalMs">
+          Minimum time between calls
+          <span class="pi-badge ms-1">{{ minSendIntervalMs }} ms</span>
+        </label>
+        <input
+          id="minSendIntervalMs"
+          v-model.number="minSendIntervalMs"
+          class="pi-range"
+          max="3000"
+          min="0"
+          step="50"
+          type="range"
+        />
+        <div class="pi-hint mb-3">
+          At most one service call per this long, always with the newest value. Raise it for devices
+          that queue commands and replay them late (some Govee and cloud lights). Lower it for
+          fast local lights.
+        </div>
+
+        <label class="pi-label" for="deviceTimeoutMs">
+          Wait for the device
+          <span class="pi-badge ms-1">{{ deviceTimeoutMs === 0 ? 'off' : deviceTimeoutMs + ' ms' }}</span>
+        </label>
+        <input
+          id="deviceTimeoutMs"
+          v-model.number="deviceTimeoutMs"
+          class="pi-range"
+          max="5000"
+          min="0"
+          step="250"
+          type="range"
+        />
+        <div class="pi-hint mb-3">
+          Before each new call, wait until the device has reached the previous value, up to this
+          long. Prevents slow lights from queuing commands and replaying them late. Zero = never
+          wait.
+        </div>
+
         <PiToggleRow id="chkOptimisticDisplay" v-model="optimisticDisplay" label="Instant feedback">
           <div class="pi-hint mb-2">
             Shows the new value on the dial while you turn it, sends it to Home Assistant, then
@@ -510,6 +548,8 @@ const serviceRotation = ref({})
 
 const rotationTickMultiplier = ref(1)
 const rotationTickBucketSizeMs = ref(100)
+const minSendIntervalMs = ref(250)
+const deviceTimeoutMs = ref(3000)
 const optimisticDisplay = ref(true)
 const readbackDelayMs = ref(800)
 
@@ -610,6 +650,8 @@ onMounted(() => {
       serviceRotation.value = settings['button']['serviceRotation']
       rotationTickMultiplier.value = settings['rotationTickMultiplier'] || 1
       rotationTickBucketSizeMs.value = settings['rotationTickBucketSizeMs'] ?? 100
+      minSendIntervalMs.value = settings['minSendIntervalMs'] ?? 250
+      deviceTimeoutMs.value = settings['deviceTimeoutMs'] ?? 3000
       optimisticDisplay.value = settings['optimisticDisplay'] !== false
       readbackDelayMs.value = settings['readbackDelayMs'] ?? 800
     })
@@ -786,6 +828,8 @@ function saveSettings() {
 
     rotationTickMultiplier: rotationTickMultiplier.value,
     rotationTickBucketSizeMs: rotationTickBucketSizeMs.value,
+    minSendIntervalMs: minSendIntervalMs.value,
+    deviceTimeoutMs: deviceTimeoutMs.value,
     optimisticDisplay: optimisticDisplay.value,
     readbackDelayMs: readbackDelayMs.value
   }
